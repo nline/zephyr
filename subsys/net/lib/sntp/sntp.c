@@ -10,6 +10,7 @@ LOG_MODULE_REGISTER(net_sntp, CONFIG_SNTP_LOG_LEVEL);
 
 #include <zephyr/net/sntp.h>
 #include "sntp_pkt.h"
+#include "math.h"
 
 #define SNTP_LI_MAX 3
 #define SNTP_VERSION_NUMBER 3
@@ -51,7 +52,7 @@ static int32_t parse_response(uint8_t *data, uint16_t len, uint32_t orig_ts,
 
 	sntp_pkt_dump(pkt);
 
-	if (ntohl(pkt->orig_tm_s) != orig_ts) {
+	if (abs(ntohl(pkt->orig_tm_s) - orig_ts) > 1) {
 		NET_DBG("Mismatch originate timestamp: %d, expect: %d",
 			ntohl(pkt->orig_tm_s), orig_ts);
 		return -EINVAL;
