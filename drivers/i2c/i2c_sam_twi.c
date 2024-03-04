@@ -31,6 +31,9 @@
 #include <zephyr/irq.h>
 LOG_MODULE_REGISTER(i2c_sam_twi);
 
+#include "i2c_bitbang.h"
+#include <zephyr/drivers/gpio.h>
+
 #include "i2c-priv.h"
 
 /** I2C bus speed [Hz] in Standard Mode */
@@ -48,6 +51,8 @@ struct i2c_sam_twi_dev_cfg {
 	const struct atmel_sam_pmc_config clock_cfg;
 	const struct pinctrl_dev_config *pcfg;
 	uint8_t irq_id;
+	struct gpio_dt_spec scl;
+	struct gpio_dt_spec sda;
 };
 
 struct twi_msg {
@@ -69,6 +74,87 @@ struct i2c_sam_twi_dev_data {
 	struct k_sem sem;
 	struct twi_msg msg;
 };
+
+static void i2c_sam_bitbang_set_scl(void *io_context, int state)
+{
+	const struct i2c_sam_twi_dev_cfg *config = io_context;
+
+	gpio_pin_set_dt(&config->scl, state);
+}
+
+static void i2c_sam_bitbang_set_sda(void *io_context, int state)
+{
+	const struct i2c_sam_twi_dev_cfg *config = io_context;
+
+	gpio_pin_set_dt(&config->sda, state);
+}
+
+static int i2c_sam_bitbang_get_sda(void *io_context)
+{
+	const struct i2c_sam_twi_dev_cfg *config = io_context;
+
+	return gpio_pin_get_dt(&config->sda) == 0 ? 0 : 1;
+}
+
+static int i2c_sam_recover_bus(const struct device *dev)
+{
+	const struct i2c_sam_twi_dev_cfg *config = dev->config;
+	struct i2c_sam_twi_dev_data *data = dev->data;
+	struct i2c_bitbang bitbang_ctx;
+	struct i2c_bitbang_io bitbang_io = {
+		.set_scl = i2c_sam_bitbang_set_scl,
+		.set_sda = i2c_sam_bitbang_set_sda,
+		.get_sda = i2c_sam_bitbang_get_sda,
+	};
+	uint32_t bitrate_cfg;
+	int error = 0;
+
+	if (!gpio_is_ready_dt(&config->scl)) {
+		LOG_ERR("SCL GPIO device not ready");
+		return -EIO;
+	}
+
+	if (!gpio_is_ready_dt(&config->sda)) {
+		LOG_ERR("SDA GPIO device not ready");
+		return -EIO;
+	}
+
+	k_sem_take(&data->lock, K_FOREVER);
+
+	error = gpio_pin_configure_dt(&config->scl, GPIO_OUTPUT_HIGH);
+	if (error != 0) {
+		LOG_ERR("failed to configure SCL GPIO (err %d)", error);
+		goto restore;
+	}
+
+	error = gpio_pin_configure_dt(&config->sda, GPIO_OUTPUT_HIGH);
+	if (error != 0) {
+		LOG_ERR("failed to configure SDA GPIO (err %d)", error);
+		goto restore;
+	}
+
+	i2c_bitbang_init(&bitbang_ctx, &bitbang_io, (void *)config);
+
+	bitrate_cfg = i2c_map_dt_bitrate(config->bitrate) | I2C_MODE_CONTROLLER;
+	error = i2c_bitbang_configure(&bitbang_ctx, bitrate_cfg);
+	if (error != 0) {
+		LOG_ERR("failed to configure I2C bitbang (err %d)", error);
+		goto restore;
+	}
+
+	error = i2c_bitbang_recover_bus(&bitbang_ctx);
+	if (error != 0) {
+		LOG_ERR("failed to recover bus (err %d)", error);
+		goto restore;
+	}
+
+restore:
+	(void)pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
+
+	k_sem_give(&data->lock);
+
+	return error;
+}
 
 static int i2c_clk_set(Twi *const twi, uint32_t speed)
 {
@@ -231,7 +317,11 @@ static int i2c_sam_twi_transfer(const struct device *dev,
 			write_msg_start(twi, &dev_data->msg, addr);
 		}
 		/* Wait for the transfer to complete */
-		k_sem_take(&dev_data->sem, K_FOREVER);
+		int rc = k_sem_take(&dev_data->sem, K_MSEC(1000));
+        if(rc < 0) {
+            ret = -EIO;
+            goto unlock;
+        }
 
 		if (dev_data->msg.twi_sr > 0) {
 			/* Something went wrong */
@@ -353,6 +443,7 @@ static int i2c_sam_twi_initialize(const struct device *dev)
 static const struct i2c_driver_api i2c_sam_twi_driver_api = {
 	.configure = i2c_sam_twi_configure,
 	.transfer = i2c_sam_twi_transfer,
+    .recover_bus = i2c_sam_recover_bus,
 };
 
 #define I2C_TWI_SAM_INIT(n)						\
@@ -371,6 +462,8 @@ static const struct i2c_driver_api i2c_sam_twi_driver_api = {
 		.irq_id = DT_INST_IRQN(n),				\
 		.pcfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),		\
 		.bitrate = DT_INST_PROP(n, clock_frequency),		\
+        .scl = GPIO_DT_SPEC_INST_GET_OR(n, scl_gpios, {0}), \
+        .sda = GPIO_DT_SPEC_INST_GET_OR(n, sda_gpios, {0}),  \
 	};								\
 									\
 	static struct i2c_sam_twi_dev_data i2c##n##_sam_data;		\
