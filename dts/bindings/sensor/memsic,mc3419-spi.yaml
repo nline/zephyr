@@ -5,4 +5,4 @@ description: MC3419 3-axis accel sensor
 
 compatible: "memsic,mc3419"
 
-include: [spi-device.yaml, memsic,mc3419.yaml]
+include: ["spi-device.yaml", "memsic,mc3419.yaml"]

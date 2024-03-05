@@ -58,7 +58,7 @@ static int mc3419_transceive(const struct device *dev, uint8_t reg,
     } else {
         const struct mc3419_config *cfg = dev->config;
         uint8_t dummy = 0;
-	    const struct spi_buf tx_buf[2] = {
+	    const struct spi_buf tx_buf[3] = {
 	    	{
 	    		.buf = &reg,
 	    		.len = 1
@@ -153,8 +153,8 @@ static const struct mc3419_bus_io mc3419_bus_io_i2c = {
 
 
 static inline int mc3419_set_op_mode(const struct device *dev,
-				     enum mc3419_op_mode mode)
-{
+				     enum mc3419_op_mode mode) {
+	const struct mc3419_config *cfg = dev->config;
     return cfg->bus_io->write(dev, MC3419_REG_OP_MODE, &mode, 1);
 }
 
@@ -257,7 +257,7 @@ static int mc3419_set_odr(const struct device *dev,
 
 	data_rate = MC3419_BASE_ODR_VAL + ret;
 
-    ret = cfg->bus_io->write(dev, MC3419_REG_SAMPLE_RATE, data_rate, 1);
+    ret = cfg->bus_io->write(dev, MC3419_REG_SAMPLE_RATE, &data_rate, 1);
 	if (ret < 0) {
 		LOG_ERR("Failed to set ODR (%d)", ret);
 		return ret;
@@ -420,7 +420,7 @@ static const struct sensor_driver_api mc3419_api = {
 
 #define MC3419_DEFINE_SPI(idx)						\
 	static const struct mc3419_config mc3419_config_##idx = {	\
-        .bus.spi = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8), 0), \
+        .bus.spi = SPI_DT_SPEC_INST_GET(idx, SPI_WORD_SET(8), 0), \
 		.bus_io = &mc3419_bus_io_spi,				   \
 		MC3419_CFG_IRQ(idx)					\
 	};								\
@@ -436,7 +436,7 @@ static const struct sensor_driver_api mc3419_api = {
 
 #define MC3419_DEFINE_I2C(idx)						\
 	static const struct mc3419_config mc3419_config_##idx = {	\
-        .bus.i2c = I2C_DT_SPEC_INST_GET(inst), \
+        .bus.i2c = I2C_DT_SPEC_INST_GET(idx), \
 		.bus_io = &mc3419_bus_io_i2c,	\
 		MC3419_CFG_IRQ(idx)					\
 	};								\
@@ -454,10 +454,10 @@ static const struct sensor_driver_api mc3419_api = {
  * Main instantiation macro. Use of COND_CODE_1() selects the right
  * bus-specific macro at preprocessor time.
  */
-#define MC3419_DEFINE(inst)						\
-	COND_CODE_1(DT_INST_ON_BUS(inst, spi),				\
-		    (MC3419_DEFINE_SPI(inst)),				\
-		    (MC3419_DEFINE_I2C(inst)))
+#define MC3419_DEFINE(idx)						\
+	COND_CODE_1(DT_INST_ON_BUS(idx, spi),				\
+		    (MC3419_DEFINE_SPI(idx)),				\
+		    (MC3419_DEFINE_I2C(idx)))
 
 
 DT_INST_FOREACH_STATUS_OKAY(MC3419_DEFINE)
