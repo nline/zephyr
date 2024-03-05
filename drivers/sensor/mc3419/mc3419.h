@@ -9,6 +9,7 @@
 
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
+#include <zephyr/drivers/spi.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/util.h>
@@ -46,6 +47,18 @@
 #define MC3419_TRIG_ANY_MOTION		1
 #define MC3419_TRIG_SIZE		2
 
+#define MC3419_BUS_SPI		DT_ANY_INST_ON_BUS_STATUS_OKAY(spi)
+#define MC3419_BUS_I2C		DT_ANY_INST_ON_BUS_STATUS_OKAY(i2c)
+
+union mc3419_bus {
+#if MC3419_BUS_SPI
+	struct spi_dt_spec spi;
+#endif
+#if MC3419_BUS_I2C
+	struct i2c_dt_spec i2c;
+#endif
+};
+
 enum mc3419_op_mode {
 	MC3419_MODE_STANDBY = 0x00,
 	MC3419_MODE_WAKE = 0x01
@@ -65,8 +78,21 @@ enum mc3419_accl_range {
 	MC3419_ACCL_RANGE_END
 };
 
+typedef bool (*mc3419_bus_ready_fn)(const struct device *dev);
+typedef int (*mc3419_reg_read_fn)(const struct device *dev,
+				  uint8_t reg_addr, void *data, uint8_t len);
+typedef int (*mc3419_reg_write_fn)(const struct device *dev,
+				   uint8_t reg_addr, void *data, uint8_t len);
+
+struct mc3419_bus_io {
+	mc3419_bus_ready_fn ready;
+	mc3419_reg_read_fn read;
+	mc3419_reg_write_fn write;
+};
+
 struct mc3419_config {
-	struct i2c_dt_spec i2c;
+    union mc3419_bus bus;
+	const struct mc3419_bus_io *bus_io;
 #if defined(CONFIG_MC3419_TRIGGER)
 	struct gpio_dt_spec int_gpio;
 	bool int_cfg;

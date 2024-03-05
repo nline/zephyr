@@ -36,7 +36,7 @@ static void mc3419_process_int(const struct device *dev)
 	const struct mc3419_driver_data *data = dev->data;
 	uint8_t int_source = 0;
 
-	ret = i2c_reg_read_byte_dt(&cfg->i2c, MC3419_REG_INT_STATUS, &int_source);
+	ret = cfg->bus_io->read(dev, MC3419_REG_INT_STATUS, &int_source, 1);
 	if (ret < 0) {
 		goto exit;
 	}
@@ -55,8 +55,7 @@ static void mc3419_process_int(const struct device *dev)
 		}
 	}
 exit:
-	ret = i2c_reg_write_byte_dt(&cfg->i2c, MC3419_REG_INT_STATUS,
-				    MC3419_INT_CLEAR);
+    ret = cfg->bus_io->write(dev, MC3419_REG_INT_STATUS, MC3419_INT_CLEAR, 1);
 	if (ret < 0) {
 		LOG_ERR("Failed to clear interrupt (%d)", ret);
 	}
@@ -108,16 +107,21 @@ int mc3419_configure_trigger(const struct device *dev,
 		data->handler[MC3419_TRIG_ANY_MOTION] = handler;
 		data->trigger[MC3419_TRIG_ANY_MOTION] = trig;
 
-		ret = i2c_reg_update_byte_dt(&cfg->i2c, MC3419_REG_MOTION_CTRL,
-					     int_mask, handler ? int_mask : 0);
+
+        uint8_t b;
+        ret = cfg->bus_io->read(dev, MC3419_REG_MOTION_CTRL, &b, 1);
+        uint8_t to_write = (b & ~int_mask) | ((handler ? int_mask : 0) & int_mask);
+        ret |= cfg->bus_io->write(dev, MC3419_REG_MOTION_CTRL, &to_write, 1);
 		if (ret < 0) {
 			LOG_ERR("Failed to configure motion interrupt (%d)", ret);
 			return ret;
 		}
 	}
 
-	ret = i2c_reg_update_byte_dt(&cfg->i2c, MC3419_REG_INT_CTRL,
-				     buf, buf);
+    uint8_t b;
+    ret = cfg->bus_io->read(dev, MC3419_REG_INT_CTRL, &b, 1);
+    uint8_t to_write = (b & ~buf) | ((buf) & buf);
+    ret |= cfg->bus_io->write(dev, MC3419_REG_INT_CTRL, &to_write, 1);
 	if (ret < 0) {
 		LOG_ERR("Failed to configure interrupt (%d)", ret);
 		return ret;
@@ -166,8 +170,8 @@ int mc3419_trigger_init(const struct device *dev)
 	}
 
 	if (cfg->int_cfg) {
-		ret = i2c_reg_write_byte_dt(&cfg->i2c, MC3419_REG_COMM_CTRL,
-					    MC3419_INT_ROUTE);
+        ret = cfg->bus_io->write(dev, MC3419_REG_COMM_CTRL,
+					    MC3419_INT_ROUTE, 1);
 		if (ret < 0) {
 			LOG_ERR("Failed to route the interrupt to INT2 pin (%d)", ret);
 			return ret;
