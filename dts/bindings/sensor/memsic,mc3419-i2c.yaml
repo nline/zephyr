@@ -5,4 +5,4 @@ description: MC3419 3-axis accel sensor
 
 compatible: "memsic,mc3419"
 
-include: [memsic,mc3419.yaml, i2c-device.yaml]
+include: [i2c-device.yaml, memsic,mc3419.yaml]

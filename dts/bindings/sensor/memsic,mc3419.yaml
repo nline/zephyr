@@ -3,7 +3,8 @@
 
 description: MC3419 3-axis accel sensor
 
-include: [sensor-device.yaml]
+
+include: sensor-device.yaml
 
 properties:
   int-gpios:
