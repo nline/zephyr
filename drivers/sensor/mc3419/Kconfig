@@ -7,6 +7,7 @@ menuconfig MC3419
 	default y
 	depends on DT_HAS_MEMSIC_MC3419_ENABLED
 	select I2C if $(dt_compat_on_bus,$(DT_COMPAT_MEMSIC_MC3419),i2c)
+	select SPI if $(dt_compat_on_bus,$(DT_COMPAT_MEMSIC_MC3419),spi)
 	help
 	 Enable driver for MC3419 acclerometer.
 
