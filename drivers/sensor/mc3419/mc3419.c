@@ -33,10 +33,129 @@ static int mc3419_get_odr_value(uint16_t freq, uint16_t m_freq)
 	return -EINVAL;
 }
 
-static inline int mc3419_set_op_mode(const struct mc3419_config *cfg,
+#if MC3419_BUS_SPI
+static int mc3419_transceive(const struct device *dev, uint8_t reg,
+			     bool write, void *buf, size_t length)
+{
+    if(write) {
+        const struct mc3419_config *cfg = dev->config;
+	    const struct spi_buf tx_buf[2] = {
+	    	{
+	    		.buf = &reg,
+	    		.len = 1
+	    	},
+	    	{
+	    		.buf = buf,
+	    		.len = length
+	    	}
+	    };
+	    const struct spi_buf_set tx = {
+	    	.buffers = tx_buf,
+	    	.count = buf ? 2 : 1
+	    };
+
+	    return spi_write_dt(&cfg->bus.spi, &tx);
+    } else {
+        const struct mc3419_config *cfg = dev->config;
+        uint8_t dummy = 0;
+	    const struct spi_buf tx_buf[2] = {
+	    	{
+	    		.buf = &reg,
+	    		.len = 1
+	    	},
+	    	{
+	    		.buf = &dummy,
+	    		.len = 1
+	    	},
+	    	{
+	    		.buf = buf,
+	    		.len = length
+	    	}
+	    };
+	    const struct spi_buf_set tx = {
+	    	.buffers = tx_buf,
+	    	.count = buf ? 3 : 1
+	    };
+
+		const struct spi_buf_set rx = {
+			.buffers = tx_buf,
+			.count = 3
+		};
+
+		return spi_transceive_dt(&cfg->bus.spi, &tx, &rx);
+	}
+
+}
+
+#define MC3419_REG_READ			BIT(7)
+#define MC3419_REG_MASK			0x7f
+
+bool mc3419_bus_ready_spi(const struct device *dev)
+{
+	const struct mc3419_config *cfg = dev->config;
+
+	return spi_is_ready_dt(&cfg->bus.spi);
+}
+
+int mc3419_read_spi(const struct device *dev,
+		    uint8_t reg_addr, void *buf, uint8_t len)
+{
+	return mc3419_transceive(dev, reg_addr | MC3419_REG_READ, false,
+				 buf, len);
+}
+
+int mc3419_write_spi(const struct device *dev,
+		     uint8_t reg_addr, void *buf, uint8_t len)
+{
+	return mc3419_transceive(dev, reg_addr & MC3419_REG_MASK, true,
+				 buf, len);
+}
+
+static const struct mc3419_bus_io mc3419_bus_io_spi = {
+	.ready = mc3419_bus_ready_spi,
+	.read = mc3419_read_spi,
+	.write = mc3419_write_spi,
+};
+#endif
+
+#if MC3419_BUS_I2C
+
+bool mc3419_bus_ready_i2c(const struct device *dev)
+{
+	const struct mc3419_config *cfg = dev->config;
+
+	return i2c_is_ready(cfg->bus.i2c);
+}
+
+int mc3419_read_i2c(const struct device *dev,
+		    uint8_t reg_addr, void *buf, uint8_t len)
+{
+	const struct mc3219_config *cfg = dev->config;
+
+	return i2c_burst_read_dt(&cfg->bus.i2c, reg_addr, buf, len);
+}
+
+int mc3419_write_i2c(const struct device *dev,
+		     uint8_t reg_addr, void *buf, uint8_t len)
+{
+	const struct mc3419_config *cfg = dev->config;
+
+	return i2c_burst_write_dt(&cfg->bus.i2c, reg_addr, buf, len);
+}
+
+static const struct mc3419_bus_io mc3419_bus_io_i2c = {
+	.ready = mc3419_bus_ready_i2c,
+	.read = mc3419_read_i2c,
+	.write = mc3419_write_i2c,
+};
+#endif
+
+
+
+static inline int mc3419_set_op_mode(const struct device *dev,
 				     enum mc3419_op_mode mode)
 {
-	return i2c_reg_write_byte_dt(&cfg->i2c, MC3419_REG_OP_MODE, mode);
+    return cfg->bus_io->write(dev, MC3419_REG_OP_MODE, &mode, 1);
 }
 
 static int mc3419_sample_fetch(const struct device *dev,
@@ -47,7 +166,7 @@ static int mc3419_sample_fetch(const struct device *dev,
 	struct mc3419_driver_data *data = dev->data;
 
 	k_sem_take(&data->sem, K_FOREVER);
-	ret = i2c_burst_read_dt(&cfg->i2c, MC3419_REG_XOUT_L,
+    ret = cfg->bus_io->read(dev, MC3419_REG_XOUT_L,
 				(uint8_t *)data->samples,
 				MC3419_SAMPLE_READ_SIZE);
 	k_sem_give(&data->sem);
@@ -107,8 +226,11 @@ static int mc3419_set_accel_range(const struct device *dev, uint8_t range)
 		return -EINVAL;
 	}
 
-	ret = i2c_reg_update_byte_dt(&cfg->i2c, MC3419_REG_RANGE_SELECT_CTRL,
-				     MC3419_RANGE_MASK, range << 4);
+    uint8_t b;
+    ret = cfg->bus_io->read(dev, MC3419_REG_RANGE_SELECT_CTRL, &b, 1);
+    uint8_t to_write = (b & ~MC3419_RANGE_MASK) | ((range << 4) & MC3419_RANGE_MASK);
+    ret |= cfg->bus_io->write(dev, MC3419_REG_RANGE_SELECT_CTRL, &to_write, 1);
+
 	if (ret < 0) {
 		LOG_ERR("Failed to set resolution (%d)", ret);
 		return ret;
@@ -135,16 +257,15 @@ static int mc3419_set_odr(const struct device *dev,
 
 	data_rate = MC3419_BASE_ODR_VAL + ret;
 
-	ret = i2c_reg_write_byte_dt(&cfg->i2c, MC3419_REG_SAMPLE_RATE,
-				    data_rate);
+    ret = cfg->bus_io->write(dev, MC3419_REG_SAMPLE_RATE, data_rate, 1);
 	if (ret < 0) {
 		LOG_ERR("Failed to set ODR (%d)", ret);
 		return ret;
 	}
 
 	LOG_DBG("Set ODR Rate to 0x%x", data_rate);
-	ret = i2c_reg_write_byte_dt(&cfg->i2c, MC3419_REG_SAMPLE_RATE_2,
-				    CONFIG_MC3419_DECIMATION_RATE);
+	uint8_t b = CONFIG_MC3419_DECIMATION_RATE;
+    ret = cfg->bus_io->write(dev, MC3419_REG_SAMPLE_RATE_2, &b, 1);
 	if (ret < 0) {
 		LOG_ERR("Failed to set decimation rate (%d)", ret);
 		return ret;
@@ -168,7 +289,7 @@ static int mc3419_set_anymotion_threshold(const struct device *dev,
 	buf[0] = MC3419_REG_ANY_MOTION_THRES;
 	sys_put_le16((uint16_t)val->val1, &buf[1]);
 
-	ret = i2c_write_dt(&cfg->i2c, buf, sizeof(buf));
+    ret = cfg->bus_io->write(dev, MC3419_REG_ANY_MOTION_THRES, buf, sizeof(buf));
 	if (ret < 0) {
 		LOG_ERR("Failed to set anymotion threshold (%d)", ret);
 		return ret;
@@ -186,7 +307,7 @@ static int mc3419_trigger_set(const struct device *dev,
 	struct mc3419_driver_data *data = dev->data;
 
 	k_sem_take(&data->sem, K_FOREVER);
-	ret = mc3419_set_op_mode(cfg, MC3419_MODE_STANDBY);
+	ret = mc3419_set_op_mode(dev, MC3419_MODE_STANDBY);
 	if (ret < 0) {
 		goto exit;
 	}
@@ -256,7 +377,7 @@ static int mc3419_init(const struct device *dev)
 	struct mc3419_driver_data *data = dev->data;
 	const struct mc3419_config *cfg = dev->config;
 
-	if (!(i2c_is_ready_dt(&cfg->i2c))) {
+	if (!(cfg->bus_io->ready(dev))) {
 		LOG_ERR("Bus device is not ready");
 		return -ENODEV;
 	}
@@ -297,9 +418,10 @@ static const struct sensor_driver_api mc3419_api = {
 #define MC3419_CFG_IRQ(idx)
 #endif
 
-#define MC3419_DEFINE(idx)						\
+#define MC3419_DEFINE_SPI(idx)						\
 	static const struct mc3419_config mc3419_config_##idx = {	\
-		.i2c = I2C_DT_SPEC_INST_GET(idx),			\
+        .bus.spi = SPI_DT_SPEC_INST_GET(inst, SPI_WORD_SET(8), 0), \
+		.bus_io = &mc3419_bus_io_spi,				   \
 		MC3419_CFG_IRQ(idx)					\
 	};								\
 	static struct mc3419_driver_data mc3419_data_##idx;		\
@@ -310,5 +432,32 @@ static const struct sensor_driver_api mc3419_api = {
 				POST_KERNEL,				\
 				CONFIG_SENSOR_INIT_PRIORITY,		\
 				&mc3419_api);
+
+
+#define MC3419_DEFINE_I2C(idx)						\
+	static const struct mc3419_config mc3419_config_##idx = {	\
+        .bus.i2c = I2C_DT_SPEC_INST_GET(inst), \
+		.bus_io = &mc3419_bus_io_i2c,	\
+		MC3419_CFG_IRQ(idx)					\
+	};								\
+	static struct mc3419_driver_data mc3419_data_##idx;		\
+	SENSOR_DEVICE_DT_INST_DEFINE(idx,				\
+				mc3419_init, NULL,			\
+				&mc3419_data_##idx,			\
+				&mc3419_config_##idx,			\
+				POST_KERNEL,				\
+				CONFIG_SENSOR_INIT_PRIORITY,		\
+				&mc3419_api);
+
+
+/*
+ * Main instantiation macro. Use of COND_CODE_1() selects the right
+ * bus-specific macro at preprocessor time.
+ */
+#define MC3419_DEFINE(inst)						\
+	COND_CODE_1(DT_INST_ON_BUS(inst, spi),				\
+		    (MC3419_DEFINE_SPI(inst)),				\
+		    (MC3419_DEFINE_I2C(inst)))
+
 
 DT_INST_FOREACH_STATUS_OKAY(MC3419_DEFINE)
