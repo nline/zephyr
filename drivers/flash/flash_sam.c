@@ -394,19 +394,22 @@ static bool sam_flash_erase_foreach_page(const struct flash_pages_info *info, vo
 	}
 
 	/* Check if we've reached the end of pages to erase */
-	if (info->start_offset >= erase_data->section_end) {
+	if (info->start_offset + info->size >= erase_data->section_end) {
 		/* Succeeded, stop iterating */
+        LOG_INF("Marking succeeded as true!");
 		erase_data->succeeded = true;
 		return false;
 	}
 
 	if (sam_flash_unlock_page(dev, info) < 0) {
 		/* Failed to unlock page, stop iterating */
+        LOG_ERR("Failed to unlock page");
 		return false;
 	}
 
 	if (sam_flash_erase_page(dev, info) < 0) {
 		/* Failed to erase page, stop iterating */
+        LOG_ERR("Failed to erase page");
 		return false;
 	}
 
